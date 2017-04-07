@@ -3,6 +3,7 @@ package com.roundel.contraster;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.util.Log;
 
 import java.util.Objects;
 
@@ -19,7 +20,7 @@ public class MuzeiChangeReceiver extends BroadcastReceiver
     {
         if(Objects.equals(ARTWORK_CHANGED, intent.getAction()))
         {
-            context.sendBroadcast(new Intent(context, CalculateColorService.class));
+            context.startService(new Intent(context, CalculateColorService.class));
         }
     }
 }
