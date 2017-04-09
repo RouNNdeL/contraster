@@ -17,7 +17,6 @@ import android.view.WindowManager;
 import com.google.android.apps.muzei.api.MuzeiContract;
 
 import java.io.FileNotFoundException;
-import java.util.Arrays;
 
 /**
  * Created by Krzysiek on 2017-04-07.
@@ -26,13 +25,28 @@ import java.util.Arrays;
 public class CalculateColorService extends IntentService
 {
     private final int COLOR_VIBRANT = 0;
-    private final int COLOR_LIGHT_VIBRANT = 1;
-    private final int COLOR_DARK_VIBRANT = 2;
+    private final int COLOR_DARK_VIBRANT = 1;
+    private final int COLOR_LIGHT_VIBRANT = 2;
     private final int COLOR_MUTED = 3;
-    private final int COLOR_LIGHT_MUTED = 4;
-    private final int COLOR_DARK_MUTED = 5;
-    private String ZOOPER_VARIABLE_NAME = "C_COLOR";
-    private int[] priorities = {COLOR_VIBRANT, COLOR_LIGHT_VIBRANT, COLOR_DARK_VIBRANT, COLOR_MUTED, COLOR_LIGHT_MUTED, COLOR_DARK_MUTED};
+    private final int COLOR_DARK_MUTED = 4;
+    private final int COLOR_LIGHT_MUTED = 5;
+
+    private final String ZOOPER_BG_COLOR = "C_BG_COLOR";
+    private final String ZOOPER_TEXT_COLOR = "C_TEXT_COLOR";
+
+    private final float CONTRAST_HUE_SATURATION_THRESHOLD = 15.0f;
+    private float BG_LUMINESCENCE_THRESHOLD = 0.1f;
+    private final float LUMINESCENCE_THRESHOLD_LIGHT = 0.715f;
+    private final float LUMINESCENCE_THRESHOLD_DARK = 0.615f;
+
+    private final float HUE_MULTIPLIER = 1 / 30f;
+    private float CONTRAST_MULTIPLIER = 0.8f;
+    private final float SATURATION_MULTIPLIER = 4f;
+
+    private int[] priorities = {COLOR_VIBRANT, COLOR_DARK_VIBRANT, COLOR_LIGHT_VIBRANT, COLOR_MUTED, COLOR_DARK_MUTED, COLOR_LIGHT_MUTED,};
+
+    private int lightTextColor = 0xFFFFFFFF;
+    private int darkTextColor = 0x8A000000;
 
     /**
      * {@inheritDoc}
@@ -55,15 +69,17 @@ public class CalculateColorService extends IntentService
             Bitmap wallpaper = MuzeiContract.Artwork.getCurrentArtworkBitmap(this);
             if(wallpaper == null || wallpaper.isRecycled())
                 return;
-            Palette palette = Palette.from(wallpaper).generate();
+            Palette palette = Palette.from(wallpaper).maximumColorCount(48).generate();
 
             @ColorInt int backgroundColor = getBackgroundColor(wallpaper, 75, 675, 1525);
+            @ColorInt int bestColor = getBestColor(palette, backgroundColor);
+            @ColorInt int textColor = getTextColor(bestColor, backgroundColor);
 
-            int bestColor = getBestColor(palette, backgroundColor);
-            Log.d("CalculateColorService", "BestColor: " + bestColor + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
+            Log.d("CalculateColorService", "BestColor: " + String.format("#%06X", (0xFFFFFF & bestColor)) + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
 
             //TODO: Calculate contrast and chose an appropriate text color
-            updateZooperVariable(bestColor);
+            updateZooperVariable(ZOOPER_BG_COLOR, bestColor);
+            updateZooperVariable(ZOOPER_TEXT_COLOR, textColor);
         }
         catch(FileNotFoundException e)
         {
@@ -115,24 +131,20 @@ public class CalculateColorService extends IntentService
         );
         bitmap.recycle();
 
-        int[] pixels = new int[radiusX * radiusY * 4];
-        scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
-
-        Bitmap area = Bitmap.createBitmap(radiusX * 2, radiusY * 2, Bitmap.Config.ARGB_8888);
-        area.setPixels(pixels, 0, radiusX * 2, 0, 0, radiusX * 2, radiusY * 2);
-
         //Use this only for debugging purposes,
         // as it creates a copy of the original bitmap in the memory
-        int[] test = new int[radiusX * radiusY * 4];
+        /*int[] test = new int[radiusX * radiusY * 4];
         Arrays.fill(test, Color.RED);
         Bitmap copy = scaledWallpaper.copy(scaledWallpaper.getConfig(), true);
-        copy.setPixels(test, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
+        copy.setPixels(test, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);*/
 
-        final int dominantColor = Palette.from(area).generate().getDominantColor(-1);
+        final int dominantColor = Palette.from(scaledWallpaper).setRegion(x, y, x + radiusX * 2, y + radiusY * 2).generate().getDominantColor(-1);
         if(dominantColor == -1)
         {
-            int r = 0, g = 0, b = 0, n = 0;
+            int[] pixels = new int[radiusX * radiusY * 4];
+            scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
 
+            int r = 0, g = 0, b = 0, n = 0;
             for(int color : pixels)
             {
                 r += Color.red(color);
@@ -151,7 +163,7 @@ public class CalculateColorService extends IntentService
     private int getBestColor(Palette palette, @ColorInt int background)
     {
         int bestColor = -1;
-        float bestContrast = -1;
+        float bestScore = -1;
         for(int type : priorities)
         {
             int color = -1;
@@ -179,28 +191,40 @@ public class CalculateColorService extends IntentService
             if(color == -1)
                 continue;
 
-            float contrast = calculateContrast(color, background);
-            Log.d("CalculateColorService", type + ": " + String.format("#%06X", (0xFFFFFF & color)) + " -> " + contrast);
-            if(contrast > 3.25)
+            float contrast = getContrast(color, background);
+            float hue = getHueDifference(color, background);
+            float[] hsv = new float[3];
+            Color.colorToHSV(color, hsv);
+            float saturation = hsv[1];
+
+            final float score = contrast * CONTRAST_MULTIPLIER + (saturation > 0.2f ? hue * HUE_MULTIPLIER : hue * HUE_MULTIPLIER * 0.1f) + saturation * SATURATION_MULTIPLIER;
+            Log.d("CalculateColorService", type + ": " + String.format("#%06X", (0xFFFFFF & color)) + " -> " +
+                    contrast * CONTRAST_MULTIPLIER + " + " + (saturation > 0.2f ? hue * HUE_MULTIPLIER : hue * HUE_MULTIPLIER * 0.1f) + " + " + saturation * SATURATION_MULTIPLIER +  " = " + score);
+            if(score > CONTRAST_HUE_SATURATION_THRESHOLD && background != color)
                 return color;
-            if(contrast > bestContrast)
+            if(score > bestScore && background != color)
             {
-                bestContrast = contrast;
+                bestScore = score;
                 bestColor = color;
             }
         }
         return bestColor;
     }
 
-    private float calculateContrast(@ColorInt int color1, @ColorInt int color2)
+    private float getContrast(@ColorInt int color1, @ColorInt int color2)
     {
-        float l1 = calculateLuminescence(Color.red(color1), Color.green(color1), Color.blue(color1));
-        float l2 = calculateLuminescence(Color.red(color2), Color.green(color2), Color.blue(color2));
+        float l1 = getLuminescence(color1);
+        float l2 = getLuminescence(color2);
 
         return (float) (l1 > l2 ? (l1 + 0.05) / (l2 + 0.05) : (l2 + 0.05) / (l1 + 0.05));
     }
 
-    private float calculateLuminescence(int r, int g, int b)
+    private float getLuminescence(@ColorInt int color)
+    {
+        return getLuminescence(Color.red(color), Color.green(color), Color.blue(color));
+    }
+
+    private float getLuminescence(int r, int g, int b)
     {
         double rg;
         double gg;
@@ -222,14 +246,70 @@ public class CalculateColorService extends IntentService
         return (float) (0.2126 * rg + 0.7152 * gg + 0.0722 * bg);
     }
 
-    private void updateZooperVariable(@ColorInt int colorValue)
+    private int getHueDifference(@ColorInt int color1, @ColorInt int color2)
     {
-        updateZooperVariable(String.format("#%06X", (0xFFFFFF & colorValue)));
+        final int distance = Math.abs(getHue(color1) - getHue(color2));
+        if(distance > 180)
+            return 360 - distance;
+        return distance;
     }
 
-    private void updateZooperVariable(String variableValue)
+    private int getHue(@ColorInt int color)
     {
-        updateZooperVariable(ZOOPER_VARIABLE_NAME, variableValue);
+        return getHue(Color.red(color), Color.green(color), Color.blue(color));
+    }
+
+    private int getHue(int r, int g, int b)
+    {
+
+        float min = Math.min(Math.min(r, g), b);
+        float max = Math.max(Math.max(r, g), b);
+
+        float hue;
+        if(max == r)
+        {
+            hue = (g - b) / (max - min);
+
+        }
+        else if(max == g)
+        {
+            hue = 2f + (b - r) / (max - min);
+
+        }
+        else
+        {
+            hue = 4f + (r - g) / (max - min);
+        }
+
+        hue = hue * 60;
+        if(hue < 0) hue = hue + 360;
+
+        return Math.round(hue);
+    }
+
+    @ColorInt
+    private int getTextColor(@ColorInt int bestColor, @ColorInt int backgroundColor)
+    {
+        float luminescence = getLuminescence(bestColor);
+        float bgLuminescence = getLuminescence(backgroundColor);
+        Log.d("CalculateColorService", "luminescence: "+luminescence+" bg_lumi: "+bgLuminescence);
+        if(bgLuminescence < BG_LUMINESCENCE_THRESHOLD)
+        {
+            if(luminescence > LUMINESCENCE_THRESHOLD_DARK)
+                return darkTextColor;
+            return lightTextColor;
+        }
+        else
+        {
+            if(luminescence > LUMINESCENCE_THRESHOLD_LIGHT)
+                return darkTextColor;
+            return lightTextColor;
+        }
+    }
+
+    private void updateZooperVariable(String variableName, @ColorInt int color)
+    {
+        updateZooperVariable(variableName, "#" + Integer.toHexString(color));
     }
 
     private void updateZooperVariable(String variableName, String variableValue)
@@ -242,7 +322,7 @@ public class CalculateColorService extends IntentService
         bundle.putString("org.zooper.zw.tasker.var.extra.STRING_TEXT", variableValue);
         intent.putExtra("org.zooper.zw.tasker.var.extra.BUNDLE", bundle);
 
-        Log.d("CalculateColorService", "Sending color: " + variableValue);
+        Log.d("CalculateColorService", "Sending " + variableName + ": " + variableValue);
 
         this.sendBroadcast(intent);
     }
