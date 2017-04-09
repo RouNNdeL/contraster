@@ -14,11 +14,12 @@ import java.util.Objects;
 public class MuzeiChangeReceiver extends BroadcastReceiver
 {
     private final String ARTWORK_CHANGED = "com.google.android.apps.muzei.ACTION_ARTWORK_CHANGED";
+    private final String ACTION_TEST = "com.roundel.contraster.ACTION_REFRESH";
 
     @Override
     public void onReceive(Context context, Intent intent)
     {
-        if(Objects.equals(ARTWORK_CHANGED, intent.getAction()))
+        if(Objects.equals(ARTWORK_CHANGED, intent.getAction()) || Objects.equals(ACTION_TEST, intent.getAction()))
         {
             context.startService(new Intent(context, CalculateColorService.class));
         }

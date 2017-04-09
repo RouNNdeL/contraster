@@ -1,19 +1,23 @@
 package com.roundel.contraster;
 
 import android.app.IntentService;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Point;
 import android.os.Bundle;
 import android.support.annotation.ColorInt;
 import android.support.annotation.Nullable;
 import android.support.v7.graphics.Palette;
 import android.util.Log;
-import android.widget.Toast;
+import android.view.Display;
+import android.view.WindowManager;
 
 import com.google.android.apps.muzei.api.MuzeiContract;
 
 import java.io.FileNotFoundException;
+import java.util.Arrays;
 
 /**
  * Created by Krzysiek on 2017-04-07.
@@ -21,15 +25,13 @@ import java.io.FileNotFoundException;
 
 public class CalculateColorService extends IntentService
 {
-    private String ZOOPER_VARIABLE_NAME = "C_COLOR";
-
     private final int COLOR_VIBRANT = 0;
     private final int COLOR_LIGHT_VIBRANT = 1;
     private final int COLOR_DARK_VIBRANT = 2;
     private final int COLOR_MUTED = 3;
     private final int COLOR_LIGHT_MUTED = 4;
     private final int COLOR_DARK_MUTED = 5;
-    
+    private String ZOOPER_VARIABLE_NAME = "C_COLOR";
     private int[] priorities = {COLOR_VIBRANT, COLOR_LIGHT_VIBRANT, COLOR_DARK_VIBRANT, COLOR_MUTED, COLOR_LIGHT_MUTED, COLOR_DARK_MUTED};
 
     /**
@@ -55,12 +57,12 @@ public class CalculateColorService extends IntentService
                 return;
             Palette palette = Palette.from(wallpaper).generate();
 
-            BitmapScaleUtil bitmapUtil = new BitmapScaleUtil(wallpaper, 1920, 1080);
-            int backgroundColor = bitmapUtil.getAverageColor(810, 1390, 100);
+            @ColorInt int backgroundColor = getBackgroundColor(wallpaper, 75, 675, 1525);
 
             int bestColor = getBestColor(palette, backgroundColor);
-            Log.d("CalculateColorService", "BestColor: "+bestColor+" BackgroundColor: "+String.format("#%06X", (0xFFFFFF & backgroundColor)));
+            Log.d("CalculateColorService", "BestColor: " + bestColor + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
 
+            //TODO: Calculate contrast and chose an appropriate text color
             updateZooperVariable(bestColor);
         }
         catch(FileNotFoundException e)
@@ -68,7 +70,83 @@ public class CalculateColorService extends IntentService
             e.printStackTrace();
         }
     }
-    
+
+    @ColorInt
+    private int getBackgroundColor(Bitmap bitmap, int radius, int targetX, int targetY)
+    {
+        return getBackgroundColor(bitmap, radius, radius, targetX, targetY);
+    }
+
+    @ColorInt
+    private int getBackgroundColor(Bitmap bitmap, int radiusX, int radiusY, int targetX, int targetY)
+    {
+        WindowManager window = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+        Display display = window.getDefaultDisplay();
+        Point size = new Point();
+        display.getSize(size);
+
+        return getBackgroundColor(bitmap, size.x, size.y, radiusX, radiusY, targetX, targetY);
+    }
+
+    @ColorInt
+    private int getBackgroundColor(Bitmap bitmap, int deviceWidth, int deviceHeight, int radius, int targetX, int targetY)
+    {
+        return getBackgroundColor(bitmap, deviceWidth, deviceHeight, radius, radius, targetX, targetY);
+    }
+
+    @ColorInt
+    private int getBackgroundColor(Bitmap bitmap, int targetWidth, int targetHeight, int radiusX, int radiusY, int targetX, int targetY)
+    {
+        final float scaleY = (float) bitmap.getHeight() / (float) targetHeight;
+        final float scaleX = (float) bitmap.getWidth() / (float) targetWidth;
+        final float scale = Math.min(scaleY, scaleX);
+
+        final int offsetX = (int) Math.floor((Math.round(bitmap.getWidth() / scale) - targetWidth) / 2);
+        final int offsetY = (int) Math.floor((Math.round(bitmap.getHeight() / scale) - targetHeight) / 2);
+
+        final int x = offsetX + (targetX - radiusX);
+        final int y = offsetY + (targetY - radiusY);
+
+        Bitmap scaledWallpaper = Bitmap.createScaledBitmap(
+                bitmap,
+                (int) (bitmap.getWidth() / scale),
+                (int) (bitmap.getHeight() / scale),
+                false
+        );
+        bitmap.recycle();
+
+        int[] pixels = new int[radiusX * radiusY * 4];
+        scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
+
+        Bitmap area = Bitmap.createBitmap(radiusX * 2, radiusY * 2, Bitmap.Config.ARGB_8888);
+        area.setPixels(pixels, 0, radiusX * 2, 0, 0, radiusX * 2, radiusY * 2);
+
+        //Use this only for debugging purposes,
+        // as it creates a copy of the original bitmap in the memory
+        int[] test = new int[radiusX * radiusY * 4];
+        Arrays.fill(test, Color.RED);
+        Bitmap copy = scaledWallpaper.copy(scaledWallpaper.getConfig(), true);
+        copy.setPixels(test, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
+
+        final int dominantColor = Palette.from(area).generate().getDominantColor(-1);
+        if(dominantColor == -1)
+        {
+            int r = 0, g = 0, b = 0, n = 0;
+
+            for(int color : pixels)
+            {
+                r += Color.red(color);
+                g += Color.green(color);
+                b += Color.blue(color);
+
+                n++;
+            }
+
+            return Color.rgb(r / n, g / n, b / n);
+        }
+        return dominantColor;
+    }
+
     @ColorInt
     private int getBestColor(Palette palette, @ColorInt int background)
     {
@@ -102,7 +180,7 @@ public class CalculateColorService extends IntentService
                 continue;
 
             float contrast = calculateContrast(color, background);
-            Log.d("CalculateColorService", type+": "+String.format("#%06X", (0xFFFFFF & color))+" -> "+contrast);
+            Log.d("CalculateColorService", type + ": " + String.format("#%06X", (0xFFFFFF & color)) + " -> " + contrast);
             if(contrast > 3.25)
                 return color;
             if(contrast > bestContrast)
@@ -164,7 +242,7 @@ public class CalculateColorService extends IntentService
         bundle.putString("org.zooper.zw.tasker.var.extra.STRING_TEXT", variableValue);
         intent.putExtra("org.zooper.zw.tasker.var.extra.BUNDLE", bundle);
 
-        Log.d("CalculateColorService", "Sending color: "+variableValue);
+        Log.d("CalculateColorService", "Sending color: " + variableValue);
 
         this.sendBroadcast(intent);
     }
