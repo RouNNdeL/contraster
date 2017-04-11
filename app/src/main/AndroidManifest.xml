@@ -21,6 +21,8 @@
             <intent-filter>
                 <action android:name="com.google.android.apps.muzei.ACTION_ARTWORK_CHANGED"/>
                 <action android:name="com.roundel.contraster.ACTION_REFRESH"/>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.USER_PRESENT"/>
             </intent-filter>
         </receiver>
     </application>

@@ -17,6 +17,7 @@ import android.view.WindowManager;
 import com.google.android.apps.muzei.api.MuzeiContract;
 
 import java.io.FileNotFoundException;
+import java.text.DecimalFormat;
 
 /**
  * Created by Krzysiek on 2017-04-07.
@@ -24,26 +25,34 @@ import java.io.FileNotFoundException;
 
 public class CalculateColorService extends IntentService
 {
-    private final int COLOR_VIBRANT = 0;
-    private final int COLOR_DARK_VIBRANT = 1;
-    private final int COLOR_LIGHT_VIBRANT = 2;
-    private final int COLOR_MUTED = 3;
-    private final int COLOR_DARK_MUTED = 4;
-    private final int COLOR_LIGHT_MUTED = 5;
+    private final static String TAG = CalculateColorService.class.getSimpleName();;
+
+    private static final int COLOR_VIBRANT = 0;
+    private static final int COLOR_DARK_VIBRANT = 1;
+    private static final int COLOR_LIGHT_VIBRANT = 2;
+    private static final int COLOR_MUTED = 3;
+    private static final int COLOR_DARK_MUTED = 4;
+    private static final int COLOR_LIGHT_MUTED = 5;
+
+    private static final int[] COLORS = {COLOR_VIBRANT, COLOR_DARK_VIBRANT, COLOR_LIGHT_VIBRANT, COLOR_MUTED, COLOR_DARK_MUTED, COLOR_LIGHT_MUTED};
 
     private final String ZOOPER_BG_COLOR = "C_BG_COLOR";
     private final String ZOOPER_TEXT_COLOR = "C_TEXT_COLOR";
 
-    private final float CONTRAST_HUE_SATURATION_THRESHOLD = 15.0f;
-    private float BG_LUMINESCENCE_THRESHOLD = 0.1f;
+    private final float WEIGHT_VIBRANT = 1.2f;
+    private final float WEIGHT_DARK_VIBRANT = 1.075f;
+    private final float WEIGHT_LIGHT_VIBRANT = 1f;
+    private final float WEIGHT_MUTED = 0.8f;
+    private final float WEIGHT_DARK_MUTED = 0.8f;
+    private final float WEIGHT_LIGHT_MUTED = 0.8f;
+
+    private final float BG_LUMINESCENCE_THRESHOLD = 0.1f;
     private final float LUMINESCENCE_THRESHOLD_LIGHT = 0.715f;
     private final float LUMINESCENCE_THRESHOLD_DARK = 0.615f;
 
     private final float HUE_MULTIPLIER = 1 / 30f;
-    private float CONTRAST_MULTIPLIER = 0.8f;
-    private final float SATURATION_MULTIPLIER = 4f;
-
-    private int[] priorities = {COLOR_VIBRANT, COLOR_DARK_VIBRANT, COLOR_LIGHT_VIBRANT, COLOR_MUTED, COLOR_DARK_MUTED, COLOR_LIGHT_MUTED,};
+    private final float SATURATION_MULTIPLIER = 6f;
+    private float CONTRAST_MULTIPLIER = 0.6f;
 
     private int lightTextColor = 0xFFFFFFFF;
     private int darkTextColor = 0x8A000000;
@@ -58,7 +67,7 @@ public class CalculateColorService extends IntentService
 
     public CalculateColorService()
     {
-        super("CalculateColorService");
+        super(TAG);
     }
 
     @Override
@@ -69,15 +78,26 @@ public class CalculateColorService extends IntentService
             Bitmap wallpaper = MuzeiContract.Artwork.getCurrentArtworkBitmap(this);
             if(wallpaper == null || wallpaper.isRecycled())
                 return;
-            Palette palette = Palette.from(wallpaper).maximumColorCount(48).generate();
+
+            Palette palette = null;
+            try
+            {
+                palette = Palette.from(wallpaper).maximumColorCount(48).generate();
+            }
+            catch(IllegalArgumentException unexpected)
+            {
+                Log.e(TAG, "Unexpected exception");
+                unexpected.printStackTrace();
+            }
+            if(palette == null)
+                return;
 
             @ColorInt int backgroundColor = getBackgroundColor(wallpaper, 75, 675, 1525);
             @ColorInt int bestColor = getBestColor(palette, backgroundColor);
             @ColorInt int textColor = getTextColor(bestColor, backgroundColor);
 
-            Log.d("CalculateColorService", "BestColor: " + String.format("#%06X", (0xFFFFFF & bestColor)) + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
+            Log.d(TAG, "BestColor: " + String.format("#%06X", (0xFFFFFF & bestColor)) + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
 
-            //TODO: Calculate contrast and chose an appropriate text color
             updateZooperVariable(ZOOPER_BG_COLOR, bestColor);
             updateZooperVariable(ZOOPER_TEXT_COLOR, textColor);
         }
@@ -138,8 +158,10 @@ public class CalculateColorService extends IntentService
         Bitmap copy = scaledWallpaper.copy(scaledWallpaper.getConfig(), true);
         copy.setPixels(test, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);*/
 
-        final int dominantColor = Palette.from(scaledWallpaper).setRegion(x, y, x + radiusX * 2, y + radiusY * 2).generate().getDominantColor(-1);
-        if(dominantColor == -1)
+        final int dominantColor = Palette.from(scaledWallpaper)
+                .setRegion(x, y, x + radiusX * 2, y + radiusY * 2).generate()
+                .getDominantColor(0);
+        if(dominantColor == 0)
         {
             int[] pixels = new int[radiusX * radiusY * 4];
             scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
@@ -164,44 +186,63 @@ public class CalculateColorService extends IntentService
     {
         int bestColor = -1;
         float bestScore = -1;
-        for(int type : priorities)
+        for(int type : COLORS)
         {
-            int color = -1;
+            int color = 0;
+            float weight = 0;
             switch(type)
             {
                 case COLOR_VIBRANT:
-                    color = palette.getVibrantColor(-1);
-                    break;
-                case COLOR_LIGHT_VIBRANT:
-                    color = palette.getLightVibrantColor(-1);
+                    color = palette.getVibrantColor(0);
+                    weight = WEIGHT_VIBRANT;
                     break;
                 case COLOR_DARK_VIBRANT:
-                    color = palette.getDarkVibrantColor(-1);
+                    color = palette.getDarkVibrantColor(0);
+                    weight = WEIGHT_DARK_VIBRANT;
+                    break;
+                case COLOR_LIGHT_VIBRANT:
+                    color = palette.getLightVibrantColor(0);
+                    weight = WEIGHT_LIGHT_VIBRANT;
                     break;
                 case COLOR_MUTED:
-                    color = palette.getMutedColor(-1);
-                    break;
-                case COLOR_LIGHT_MUTED:
-                    color = palette.getLightMutedColor(-1);
+                    color = palette.getMutedColor(0);
+                    weight = WEIGHT_MUTED;
                     break;
                 case COLOR_DARK_MUTED:
-                    color = palette.getDarkMutedColor(-1);
+                    color = palette.getDarkMutedColor(0);
+                    weight = WEIGHT_DARK_MUTED;
+                    break;
+                case COLOR_LIGHT_MUTED:
+                    color = palette.getLightMutedColor(0);
+                    weight = WEIGHT_LIGHT_MUTED;
                     break;
             }
-            if(color == -1)
+            if(color == 0)
                 continue;
+
+            final float[] hsv = new float[3];
+            final float[] hsv2 = new float[3];
+            Color.colorToHSV(color, hsv);
+            Color.colorToHSV(background, hsv2);
 
             float contrast = getContrast(color, background);
             float hue = getHueDifference(color, background);
-            float[] hsv = new float[3];
-            Color.colorToHSV(color, hsv);
+            float value = hsv[2];
+            float bg_value = hsv2[2];
             float saturation = hsv[1];
+            float bg_saturation = hsv2[1];
 
-            final float score = contrast * CONTRAST_MULTIPLIER + (saturation > 0.2f ? hue * HUE_MULTIPLIER : hue * HUE_MULTIPLIER * 0.1f) + saturation * SATURATION_MULTIPLIER;
-            Log.d("CalculateColorService", type + ": " + String.format("#%06X", (0xFFFFFF & color)) + " -> " +
-                    contrast * CONTRAST_MULTIPLIER + " + " + (saturation > 0.2f ? hue * HUE_MULTIPLIER : hue * HUE_MULTIPLIER * 0.1f) + " + " + saturation * SATURATION_MULTIPLIER +  " = " + score);
-            if(score > CONTRAST_HUE_SATURATION_THRESHOLD && background != color)
-                return color;
+            contrast *= CONTRAST_MULTIPLIER;
+            hue = hue * HUE_MULTIPLIER * (Math.min(saturation, bg_saturation) < 0.2f ? 0.1f : 1f);
+            hue = hue * HUE_MULTIPLIER * (Math.max(value, bg_value) < 0.2f ? 0.25f : 1f);
+            saturation = saturation * SATURATION_MULTIPLIER;
+
+            final float score = weight * (contrast + hue + saturation);
+
+            DecimalFormat df = new DecimalFormat("0.000");
+            Log.d(TAG, type + " (W:" + weight + "): " + String.format("#%06X", (0xFFFFFF & color)) + " -> "+
+                    df.format(contrast) + " + " + df.format(hue) + " + " + df.format(saturation) + " = " + df.format(score));
+
             if(score > bestScore && background != color)
             {
                 bestScore = score;
@@ -219,6 +260,14 @@ public class CalculateColorService extends IntentService
         return (float) (l1 > l2 ? (l1 + 0.05) / (l2 + 0.05) : (l2 + 0.05) / (l1 + 0.05));
     }
 
+    private float getLuminescenceDifference(@ColorInt int color1, @ColorInt int color2)
+    {
+        float l1 = getLuminescence(color1);
+        float l2 = getLuminescence(color2);
+
+        return Math.abs(l1 - l2);
+    }
+
     private float getLuminescence(@ColorInt int color)
     {
         return getLuminescence(Color.red(color), Color.green(color), Color.blue(color));
@@ -226,9 +275,8 @@ public class CalculateColorService extends IntentService
 
     private float getLuminescence(int r, int g, int b)
     {
-        double rg;
-        double gg;
-        double bg;
+        double rg, gg, bg;
+
         if(r <= 10)
             rg = r / 3294;
         else
@@ -243,6 +291,7 @@ public class CalculateColorService extends IntentService
             bg = b / 3294;
         else
             bg = Math.pow((b / 269.0 + 0.0513), 2.4);
+
         return (float) (0.2126 * rg + 0.7152 * gg + 0.0722 * bg);
     }
 
@@ -292,7 +341,7 @@ public class CalculateColorService extends IntentService
     {
         float luminescence = getLuminescence(bestColor);
         float bgLuminescence = getLuminescence(backgroundColor);
-        Log.d("CalculateColorService", "luminescence: "+luminescence+" bg_lumi: "+bgLuminescence);
+        Log.d(TAG, "luminescence: " + luminescence + " bg_lumi: " + bgLuminescence);
         if(bgLuminescence < BG_LUMINESCENCE_THRESHOLD)
         {
             if(luminescence > LUMINESCENCE_THRESHOLD_DARK)
@@ -322,7 +371,7 @@ public class CalculateColorService extends IntentService
         bundle.putString("org.zooper.zw.tasker.var.extra.STRING_TEXT", variableValue);
         intent.putExtra("org.zooper.zw.tasker.var.extra.BUNDLE", bundle);
 
-        Log.d("CalculateColorService", "Sending " + variableName + ": " + variableValue);
+        Log.d(TAG, "Sending " + variableName + ": " + variableValue);
 
         this.sendBroadcast(intent);
     }
