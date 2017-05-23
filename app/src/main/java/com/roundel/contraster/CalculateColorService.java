@@ -25,7 +25,8 @@ import java.text.DecimalFormat;
 
 public class CalculateColorService extends IntentService
 {
-    private final static String TAG = CalculateColorService.class.getSimpleName();;
+    private final static String TAG = CalculateColorService.class.getSimpleName();
+    ;
 
     private static final int COLOR_VIBRANT = 0;
     private static final int COLOR_DARK_VIBRANT = 1;
@@ -73,6 +74,7 @@ public class CalculateColorService extends IntentService
     @Override
     protected void onHandleIntent(@Nullable Intent intent)
     {
+        //TODO: Add a foreground service to always keep the app alive
         try
         {
             Bitmap wallpaper = MuzeiContract.Artwork.getCurrentArtworkBitmap(this);
@@ -94,9 +96,9 @@ public class CalculateColorService extends IntentService
 
             @ColorInt int backgroundColor = getBackgroundColor(wallpaper, 75, 675, 1525);
             @ColorInt int bestColor = getBestColor(palette, backgroundColor);
-            @ColorInt int textColor = getTextColor(bestColor, backgroundColor);
+            Log.d(TAG, String.format("BestColor: #%06X BackgroundColor: #%06X", (0xFFFFFF & bestColor), (0xFFFFFF & backgroundColor)));
 
-            Log.d(TAG, "BestColor: " + String.format("#%06X", (0xFFFFFF & bestColor)) + " BackgroundColor: " + String.format("#%06X", (0xFFFFFF & backgroundColor)));
+            @ColorInt int textColor = getTextColor(bestColor, backgroundColor);
 
             updateZooperVariable(ZOOPER_BG_COLOR, bestColor);
             updateZooperVariable(ZOOPER_TEXT_COLOR, textColor);
@@ -158,27 +160,37 @@ public class CalculateColorService extends IntentService
         Bitmap copy = scaledWallpaper.copy(scaledWallpaper.getConfig(), true);
         copy.setPixels(test, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);*/
 
-        final int dominantColor = Palette.from(scaledWallpaper)
-                .setRegion(x, y, x + radiusX * 2, y + radiusY * 2).generate()
-                .getDominantColor(0);
-        if(dominantColor == 0)
+        try
         {
-            int[] pixels = new int[radiusX * radiusY * 4];
-            scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
+            final int dominantColor = Palette.from(scaledWallpaper)
+                    .setRegion(x, y, x + radiusX * 2, y + radiusY * 2).generate()
+                    .getDominantColor(0);
 
-            int r = 0, g = 0, b = 0, n = 0;
-            for(int color : pixels)
+            if(dominantColor == 0)
             {
-                r += Color.red(color);
-                g += Color.green(color);
-                b += Color.blue(color);
+                int[] pixels = new int[radiusX * radiusY * 4];
+                scaledWallpaper.getPixels(pixels, 0, radiusX * 2, x, y, radiusX * 2, radiusY * 2);
 
-                n++;
+                int r = 0, g = 0, b = 0, n = 0;
+                for(int color : pixels)
+                {
+                    r += Color.red(color);
+                    g += Color.green(color);
+                    b += Color.blue(color);
+
+                    n++;
+                }
+
+                return Color.rgb(r / n, g / n, b / n);
             }
-
-            return Color.rgb(r / n, g / n, b / n);
+            return dominantColor;
         }
-        return dominantColor;
+        catch(IllegalArgumentException unexpected)
+        {
+            unexpected.printStackTrace();
+        }
+
+        return Color.WHITE;
     }
 
     @ColorInt
@@ -237,10 +249,12 @@ public class CalculateColorService extends IntentService
             hue = hue * HUE_MULTIPLIER * (Math.max(value, bg_value) < 0.2f ? 0.25f : 1f);
             saturation = saturation * SATURATION_MULTIPLIER;
 
-            final float score = weight * (contrast + hue + saturation);
+            float score = weight * (contrast + hue + saturation);
+            if(hue < 0.01)
+                score *= 0.1;
 
             DecimalFormat df = new DecimalFormat("0.000");
-            Log.d(TAG, type + " (W:" + weight + "): " + String.format("#%06X", (0xFFFFFF & color)) + " -> "+
+            Log.d(TAG, type + " (W:" + weight + "): " + String.format("#%06X", (0xFFFFFF & color)) + " -> " +
                     df.format(contrast) + " + " + df.format(hue) + " + " + df.format(saturation) + " = " + df.format(score));
 
             if(score > bestScore && background != color)
